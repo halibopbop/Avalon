@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kings & Traitors Online</title>
+    <!-- PeerJS cho kết nối Realtime giữa các điện thoại -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root {
+            --bg-dark: #120e0b;
+            --panel-bg: #1c1612;
+            --parchment: #f1e2c3;
+            --gold: #d4af37;
+            --good-blue: #1b4985;
+            --good-light: #2b6cb0;
+            --evil-red: #8b0000;
+            --evil-light: #c53030;
+            --text-dark: #2c1d11;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Georgia', serif; }
+        body { background-color: var(--bg-dark); color: #e2d8ce; padding: 15px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+
+        .container { width: 100%; max-width: 480px; }
+        .card { background: var(--panel-bg); border: 2px solid var(--gold); border-radius: 10px; padding: 15px; margin-bottom: 15px; text-align: center; box-shadow: 0 4px 10px rgba(0,0,0,0.6); }
+        h1, h2, h3 { color: var(--gold); margin-bottom: 10px; }
+
+        input { width: 100%; padding: 12px; margin: 8px 0; border-radius: 6px; border: 1px solid var(--gold); background: #221a14; color: #fff; font-size: 1rem; text-align: center; }
+        
+        button.btn { background: linear-gradient(180deg, #d4af37 0%, #997a15 100%); color: #000; border: none; padding: 14px; font-weight: bold; font-size: 1rem; border-radius: 6px; margin: 8px 0; cursor: pointer; width: 100%; }
+        .btn-blue { background: linear-gradient(180deg, var(--good-light) 0%, var(--good-blue) 100%); color: white; border: 1px solid var(--gold); }
+        .btn-red { background: linear-gradient(180deg, var(--evil-light) 0%, var(--evil-red) 100%); color: white; border: 1px solid var(--gold); }
+
+        .parchment { background: var(--parchment); color: var(--text-dark); padding: 15px; border-radius: 6px; margin: 10px 0; border: 1px solid #8c6d46; text-align: left; }
+        .hidden { display: none !important; }
+        
+        .room-code { font-size: 1.8rem; color: var(--gold); font-weight: bold; letter-spacing: 2px; padding: 10px; background: #000; border-radius: 6px; margin: 10px 0; }
+        .player-tag { display: inline-block; background: #2a2018; border: 1px solid var(--gold); padding: 5px 10px; border-radius: 4px; margin: 3px; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <!-- CHỌN CHẾ ĐỘ -->
+    <div id="mode-screen" class="card">
+        <h1>KINGS & TRAITORS</h1>
+        <p style="margin-bottom: 15px; font-size: 0.9rem;">Game Social-Deduction Online</p>
+        <button class="btn" onclick="initHost()">TẠO PHÒNG (MÁY QUẢN TRÒ)</button>
+        <button class="btn btn-blue" onclick="showJoinScreen()">THAM GIA PHÒNG (NGƯỜI CHƠI)</button>
+    </div>
+
+    <!-- MÀN HÌNH NHẬP MÃ PHÒNG (DÀNH CHO NGƯỜI CHƠI) -->
+    <div id="join-screen" class="card hidden">
+        <h2>Vào Phòng Game</h2>
+        <input type="text" id="input-room" placeholder="Nhập Mã Phòng (VD: 4821)" maxlength="4">
+        <input type="text" id="input-name" placeholder="Tên của bạn">
+        <button class="btn btn-blue" onclick="joinRoom()">KẾT NỐI MÁY CHỦ</button>
+        <button class="btn" onclick="location.reload()">Quay Lại</button>
+    </div>
+
+    <!-- MÀN HÌNH QUẢN TRÒ (HOST) -->
+    <div id="host-screen" class="card hidden">
+        <h2>MÁY QUẢN TRÒ (TV / HOST)</h2>
+        <p>Mã Phòng Để Người Chơi Vào:</p>
+        <div class="room-code" id="display-room-code">----</div>
+        
+        <div style="margin: 15px 0;">
+            <h3>Danh Sách Người Chơi (<span id="player-count">0</span>):</h3>
+            <div id="host-player-list" style="margin-top: 5px;"></div>
+        </div>
+
+        <button class="btn" id="btn-start-game" onclick="startOnlineGame()" disabled>BẮT ĐẦU CHIA VAI TRÒ</button>
+
+        <div id="host-dashboard" class="parchment hidden" style="margin-top: 15px;">
+            <h3 style="text-align: center;">TIẾN TRÌNH TRẬN ĐẤU</h3>
+            <p>Nhiệm vụ hiện tại: <strong id="host-quest-num">1</strong> / 5</p>
+            <p>Tỉ số: <span style="color:var(--good-blue); font-weight:bold;">Phe Good: <span id="host-score-good">0</span></span> | <span style="color:var(--evil-red); font-weight:bold;">Phe Evil: <span id="host-score-evil">0</span></span></p>
+            <hr style="margin: 8px 0; border-color: #8c6d46;">
+            <p>Phiếu ĐI nhận được: <strong id="host-votes-yes">0</strong></p>
+            <p>Thẻ Nhiệm Vụ nhận được: <strong id="host-cards-count">0</strong></p>
+        </div>
+    </div>
+
+    <!-- MÀN HÌNH NGƯỜI CHƠI (PLAYER) -->
+    <div id="player-screen" class="card hidden">
+        <h2 id="player-welcome">Chào mừng!</h2>
+        <p style="font-size: 0.85rem; color: #a0aec0;">Trạng thái: <span id="player-status" style="color:var(--gold);">Đang chờ Quản trò chia vai...</span></p>
+
+        <!-- Thẻ hiển thị Role & Hướng dẫn Tiếng Việt -->
+        <div id="role-card-box" class="parchment hidden" style="margin-top: 15px;">
+            <h3 id="role-name" style="text-align: center; font-size: 1.4rem;">---</h3>
+            <p id="role-faction" style="text-align: center; font-weight: bold; margin-bottom: 8px;">---</p>
+            <p id="role-guide" style="font-size: 0.9rem; line-height: 1.4; border-top: 1px dashed #8c6d46; padding-top: 8px;">---</p>
+        </div>
+
+        <!-- Bảng thao tác Bầu cử & Làm nhiệm vụ -->
+        <div id="player-actions" class="hidden" style="margin-top: 15px;">
+            <div id="action-vote">
+                <h3>1. BÌNH CHỌN ĐỘI</h3>
+                <button class="btn btn-blue" onclick="sendAction('VOTE', true)">✓ ĐI (GO)</button>
+                <button class="btn btn-red" onclick="sendAction('VOTE', false)">✕ KHÔNG ĐI</button>
+            </div>
+
+            <div id="action-quest" class="hidden" style="margin-top: 15px;">
+                <h3>2. LÀM NHIỆM VỤ BÍ MẬT</h3>
+                <button class="btn btn-blue" onclick="sendAction('QUEST', true)">THẺ XANH (SUCCESS)</button>
+                <button class="btn btn-red" onclick="sendAction('QUEST', false)">THẺ ĐỎ (FAIL)</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    let peer = null, connList = {}, playerConn = null;
+    let roomCode = "", myName = "", isHost = false;
+    let players = [], currentQuest = 1, scoreGood = 0, scoreEvil = 0;
+    let votesReceived = 0, yesVotes = 0, questCards = [];
+
+    const ROLES_INFO = {
+        "MERLIN": { faction: "PHE GOOD (BẢO VỆ VƯƠNG QUỐC)", color: "var(--good-blue)", guide: "🔑 NĂNG LỰC (TIÊN TRI): Bạn nhìn thấy tất cả người thuộc phe EVIL (trừ Mordred). Hãy khéo léo định hướng cho phe Good nhưng KHÔNG ĐƯỢC để Sát Thủ phát hiện ra bạn!" },
+        "PERCIVAL": { faction: "PHE GOOD (BẢO VỆ VƯƠNG QUỐC)", color: "var(--good-blue)", guide: "🛡️ NĂNG LỰC: Bạn thấy 2 người xuất hiện là Merlin & Morgana nhưng không biết ai thật ai giả. Hãy dùng trí tuệ để tìm ra Merlin thật và bảo vệ vị tiên tri này!" },
+        "LOYAL SERVANT": { faction: "PHE GOOD (BẢO VỆ VƯƠNG QUỐC)", color: "var(--good-blue)", guide: "⚔️ DÂN THƯỜNG TRUNG THÀNH: Bạn không có phép thuật. Dùng lời nói, suy luận và quan sát hành vi bầu cử của mọi người để tìm ra kẻ phản bội." },
+        "ASSASSIN": { faction: "PHE EVIL (RỒNG BÓNG TỐI)", color: "var(--evil-red)", guide: "🗡️ NĂNG LỰC (SÁT THỦ): Bạn biết các đồng đội phe Evil. Nếu phe Good thắng đủ 3 nhiệm vụ, bạn có cơ hội ám sát 1 người. Nếu ám sát ĐÚNG Merlin, phe Evil LẬT KÈO THẮNG CẢ TRẬN!" },
+        "MORGANA": { faction: "PHE EVIL (RỒNG BÓNG TỐI)", color: "var(--evil-red)", guide: "🔮 NĂNG LỰC (MẠO DẠNG): Bạn biết đồng đội phe Evil. Bạn sẽ hiện lên trong mắt Percival giống hệt Merlin để làm nhiễu loạn thông tin của phe Good." },
+        "MORDRED": { faction: "PHE EVIL (RỒNG BÓNG TỐI)", color: "var(--evil-red)", guide: "👑 NĂNG LỰC (ẨN DANH): Bạn là chúa tể bóng tối. Merlin KHÔNG THỂ nhìn thấy bạn là người xấu. Hãy tận dụng lợi thế này để cài cắm vào các nhiệm vụ!" },
+        "OBERON": { faction: "PHE EVIL (RỒNG BÓNG TỐI)", color: "var(--evil-red)", guide: "🧝‍♂️ NĂNG LỰC (BÓNG MA CÔ ĐỘC): Bạn thuộc phe Evil nhưng KHÔNG BIẾT ai là đồng đội và đồng đội cũng KHÔNG BIẾT bạn. Hãy tự mình âm thầm phá hoại!" },
+        "MINION OF MORDRED": { faction: "PHE EVIL (RỒNG BÓNG TỐI)", color: "var(--evil-red)", guide: "🪓 TAY SAI BÓNG TỐI: Bạn biết các đồng đội thuộc phe Evil. Hãy phối hợp bỏ phiếu và gài thẻ ĐỎ để làm thất bại các nhiệm vụ của vương quốc." }
+    };
+
+    function showJoinScreen() {
+        document.getElementById('mode-screen').classList.add('hidden');
+        document.getElementById('join-screen').classList.remove('hidden');
+    }
+
+    // 1. KHỞI TẠO HOST (MÁY QUẢN TRÒ)
+    function initHost() {
+        isHost = true;
+        roomCode = Math.floor(1000 + Math.random() * 9000).toString();
+        document.getElementById('mode-screen').classList.add('hidden');
+        document.getElementById('host-screen').classList.remove('hidden');
+        document.getElementById('display-room-code').innerText = roomCode;
+
+        peer = new Peer('KT-' + roomCode);
+
+        peer.on('open', function(id) { console.log('Host Room created: ' + id); });
+
+        peer.on('connection', function(conn) {
+            conn.on('data', function(data) {
+                if (data.type === 'JOIN') {
+                    connList[conn.peer] = { conn: conn, name: data.name };
+                    updateHostPlayerList();
+                } else if (data.type === 'ACTION') {
+                    handlePlayerAction(data);
+                }
+            });
+        });
+    }
+
+    function updateHostPlayerList() {
+        players = Object.keys(connList).map(id => connList[id].name);
+        document.getElementById('player-count').innerText = players.length;
+        document.getElementById('host-player-list').innerHTML = players.map(p => `<span class="player-tag">👤 ${p}</span>`).join('');
+        document.getElementById('btn-start-game').disabled = players.length < 5;
+    }
+
+    // 2. KHỞI TẠO PLAYER (NGƯỜI CHƠI VÀO PHÒNG)
+    function joinRoom() {
+        let code = document.getElementById('input-room').value.trim();
+        myName = document.getElementById('input-name').value.trim();
+
+        if (!code || !myName) { alert("Vui lòng nhập đầy đủ Mã phòng và Tên!"); return; }
+
+        peer = new Peer();
+        peer.on('open', function() {
+            playerConn = peer.connect('KT-' + code);
+
+            playerConn.on('open', function() {
+                playerConn.send({ type: 'JOIN', name: myName });
+                document.getElementById('join-screen').classList.add('hidden');
+                document.getElementById('player-screen').classList.remove('hidden');
+                document.getElementById('player-welcome').innerText = "Hi, " + myName;
+            });
+
+            playerConn.on('data', function(data) {
+                if (data.type === 'ASSIGN_ROLE') {
+                    showPlayerRole(data.role);
+                }
+            });
+        });
+    }
+
+    // 3. XỬ LÝ CHIA VAI TRÒ TỪ HOST
+    function startOnlineGame() {
+        const rolesConfig = {
+            5: ["MERLIN", "PERCIVAL", "LOYAL SERVANT", "ASSASSIN", "MORGANA"],
+            6: ["MERLIN", "PERCIVAL", "LOYAL SERVANT", "LOYAL SERVANT", "ASSASSIN", "MORGANA"],
+            7: ["MERLIN", "PERCIVAL", "LOYAL SERVANT", "LOYAL SERVANT", "ASSASSIN", "MORGANA", "OBERON"],
+            8: ["MERLIN", "PERCIVAL", "LOYAL SERVANT", "LOYAL SERVANT", "LOYAL SERVANT", "ASSASSIN", "MORGANA", "MORDRED"]
+        };
+
+        let count = players.length;
+        if (!rolesConfig[count]) { alert("Game cần từ 5 đến 8 người chơi!"); return; }
+
+        let shuffled = [...rolesConfig[count]].sort(() => Math.random() - 0.5);
+        let ids = Object.keys(connList);
+
+        ids.forEach((id, index) => {
+            connList[id].role = shuffled[index];
+            connList[id].conn.send({ type: 'ASSIGN_ROLE', role: shuffled[index] });
+        });
+
+        document.getElementById('btn-start-game').classList.add('hidden');
+        document.getElementById('host-dashboard').classList.remove('hidden');
+        alert("Đã gửi vai trò bí mật & hướng dẫn đến máy của tất cả người chơi!");
+    }
+
+    // 4. HIỂN THỊ ROLE TRÊN ĐIỆN THOẠI NGƯỜI CHƠI
+    function showPlayerRole(roleKey) {
+        let info = ROLES_INFO[roleKey];
+        document.getElementById('player-status').innerText = "Trận đấu đang diễn ra";
+        document.getElementById('role-card-box').classList.remove('hidden');
+        document.getElementById('player-actions').classList.remove('hidden');
+
+        document.getElementById('role-name').innerText = roleKey;
+        document.getElementById('role-name').style.color = info.color;
+        document.getElementById('role-faction').innerText = info.faction;
+        document.getElementById('role-guide').innerText = info.guide;
+    }
+
+    // 5. NGƯỜI CHƠI GỬI BÌNH CHỌN / THẺ NHIỆM VỤ
+    function sendAction(actionType, value) {
+        if (playerConn) {
+            playerConn.send({ type: 'ACTION', actionType: actionType, value: value, name: myName });
+            alert("Đã gửi lựa chọn của bạn về máy Quản Trò!");
+        }
+    }
+
+    // 6. HOST XỬ LÝ DỮ LIỆU TỪ NGƯỜI CHƠI
+    function handlePlayerAction(data) {
+        if (data.actionType === 'VOTE') {
+            votesReceived++;
+            if (data.value) yesVotes++;
+            document.getElementById('host-votes-yes').innerText = `${yesVotes} / ${votesReceived} phiếu ĐI`;
+        } else if (data.actionType === 'QUEST') {
+            questCards.push(data.value);
+            document.getElementById('host-cards-count').innerText = `${questCards.length} thẻ`;
+
+            if (questCards.length >= 2) { // Giả định đội 2 người
+                let hasFail = questCards.includes(false);
+                if (hasFail) { scoreEvil++; alert("Nhiệm vụ THẤT BẠI (CÓ THẺ ĐỎ)!"); }
+                else { scoreGood++; alert("Nhiệm vụ THÀNH CÔNG (TOÀN THẺ XANH)!"); }
+
+                document.getElementById('host-score-good').innerText = scoreGood;
+                document.getElementById('host-score-evil').innerText = scoreEvil;
+
+                questCards = []; votesReceived = 0; yesVotes = 0;
+                currentQuest++;
+                document.getElementById('host-quest-num').innerText = currentQuest;
+            }
+        }
+    }
+</script>
+</body>
+</html>
