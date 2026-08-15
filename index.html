@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Kings & Traitors Online</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- Thu vien WebSocket MQTT chay muot 100% tren 4G/5G Viet Nam -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
     <style>
         :root {
             --bg-dark: #120e0b;
@@ -55,7 +56,7 @@
         <h2>Vào Phòng Game</h2>
         <input type="text" id="input-room" placeholder="Nhập Mã Phòng (VD: 4821)" maxlength="4">
         <input type="text" id="input-name" placeholder="Tên của bạn">
-        <button class="btn btn-blue" id="btn-connect" onclick="joinRoom()">KẾT NỐI MÁY CHỦ</button>
+        <button class="btn btn-blue" id="btn-connect" onclick="joinRoom()">KẾT NỐI VÀO PHÒNG</button>
         <button class="btn" onclick="location.reload()">Quay Lại</button>
     </div>
 
@@ -85,7 +86,7 @@
     <!-- MÀN HÌNH NGƯỜI CHƠI (PLAYER) -->
     <div id="player-screen" class="card hidden">
         <h2 id="player-welcome">Chào mừng!</h2>
-        <p style="font-size: 0.85rem; color: #a0aec0;">Trạng thái: <span id="player-status" style="color:var(--gold);">Đã vào phòng. Đang chờ Quản trò bắt đầu...</span></p>
+        <p style="font-size: 0.85rem; color: #a0aec0;">Trạng thái: <span id="player-status" style="color:var(--gold);">Đã vào phòng thành công! Đang chờ Quản trò...</span></p>
 
         <div id="role-card-box" class="parchment hidden" style="margin-top: 15px;">
             <h3 id="role-name" style="text-align: center; font-size: 1.4rem;">---</h3>
@@ -111,20 +112,11 @@
 </div>
 
 <script>
-    let peer = null, connList = {}, playerConn = null;
-    let roomCode = "", myName = "", isHost = false;
-    let players = [], currentQuest = 1, scoreGood = 0, scoreEvil = 0;
+    let mqttClient = null;
+    let roomCode = "", myName = "", myId = "p_" + Math.random().toString(36).substr(2, 9);
+    let isHost = false;
+    let players = {}, currentQuest = 1, scoreGood = 0, scoreEvil = 0;
     let votesReceived = 0, yesVotes = 0, questCards = [];
-
-    // Cấu hình STUN Server của Google giúp vượt tường lửa 4G trên điện thoại
-    const peerConfig = {
-        config: {
-            'iceServers': [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
-        }
-    };
 
     const ROLES_INFO = {
         "MERLIN": { faction: "PHE GOOD (BẢO VỆ VƯƠNG QUỐC)", color: "var(--good-blue)", guide: "🔑 NĂNG LỰC: Nhìn thấy phe EVIL (trừ Mordred). Hãy khéo léo định hướng nhưng đừng để Sát Thủ phát hiện!" },
@@ -142,22 +134,38 @@
         document.getElementById('join-screen').classList.remove('hidden');
     }
 
+    // Connect to global MQTT WebSocket server
+    function connectMQTT(onSuccess) {
+        mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+        mqttClient.on('connect', function () {
+            console.log('Connected to MQTT WebSocket');
+            if (onSuccess) onSuccess();
+        });
+        mqttClient.on('error', function(err) {
+            alert('Lỗi kết nối Server mạng. Vui lòng thử lại!');
+        });
+    }
+
+    // 1. TẠO PHÒNG (HOST)
     function initHost() {
         isHost = true;
         roomCode = Math.floor(1000 + Math.random() * 9000).toString();
-        document.getElementById('mode-screen').classList.add('hidden');
-        document.getElementById('host-screen').classList.remove('hidden');
-        document.getElementById('display-room-code').innerText = roomCode;
+        
+        connectMQTT(function() {
+            document.getElementById('mode-screen').classList.add('hidden');
+            document.getElementById('host-screen').classList.remove('hidden');
+            document.getElementById('display-room-code').innerText = roomCode;
 
-        peer = new Peer('KT-' + roomCode, peerConfig);
+            // Host sub channel cua minh
+            mqttClient.subscribe('kt_avalon/' + roomCode + '/host');
 
-        peer.on('connection', function(conn) {
-            conn.on('data', function(data) {
+            mqttClient.on('message', function (topic, message) {
+                let data = JSON.parse(message.toString());
                 if (data.type === 'JOIN') {
-                    connList[conn.peer] = { conn: conn, name: data.name };
+                    players[data.id] = { name: data.name, id: data.id };
                     updateHostPlayerList();
-                    // Phản hồi lại điện thoại xác nhận đã kết nối công nhận
-                    conn.send({ type: 'JOIN_SUCCESS' });
+                    // Gui phan hoi thanh cong cho nguoi choi
+                    mqttClient.publish('kt_avalon/' + roomCode + '/player/' + data.id, JSON.stringify({ type: 'JOIN_OK' }));
                 } else if (data.type === 'ACTION') {
                     handlePlayerAction(data);
                 }
@@ -166,32 +174,36 @@
     }
 
     function updateHostPlayerList() {
-        players = Object.keys(connList).map(id => connList[id].name);
-        document.getElementById('player-count').innerText = players.length;
-        document.getElementById('host-player-list').innerHTML = players.map(p => `<span class="player-tag">👤 ${p}</span>`).join('');
-        document.getElementById('btn-start-game').disabled = players.length < 5;
+        let pList = Object.values(players);
+        document.getElementById('player-count').innerText = pList.length;
+        document.getElementById('host-player-list').innerHTML = pList.map(p => `<span class="player-tag">👤 ${p.name}</span>`).join('');
+        document.getElementById('btn-start-game').disabled = pList.length < 5;
     }
 
+    // 2. NGƯỜI CHƠI VÀO PHÒNG (PLAYER)
     function joinRoom() {
-        let code = document.getElementById('input-room').value.trim();
+        roomCode = document.getElementById('input-room').value.trim();
         myName = document.getElementById('input-name').value.trim();
 
-        if (!code || !myName) { alert("Vui lòng nhập đầy đủ Mã phòng và Tên!"); return; }
+        if (!roomCode || !myName) { alert("Vui lòng nhập đầy đủ Mã phòng và Tên!"); return; }
 
         document.getElementById('btn-connect').innerText = "ĐANG KẾT NỐI...";
         document.getElementById('btn-connect').disabled = true;
 
-        peer = new Peer(peerConfig);
-        
-        peer.on('open', function() {
-            playerConn = peer.connect('KT-' + code);
+        connectMQTT(function() {
+            // Player sub kenh rieng cua minh
+            mqttClient.subscribe('kt_avalon/' + roomCode + '/player/' + myId);
 
-            playerConn.on('open', function() {
-                playerConn.send({ type: 'JOIN', name: myName });
-            });
+            // Gui tin nhan Xin Vao Phong toi Host
+            mqttClient.publish('kt_avalon/' + roomCode + '/host', JSON.stringify({
+                type: 'JOIN',
+                name: myName,
+                id: myId
+            }));
 
-            playerConn.on('data', function(data) {
-                if (data.type === 'JOIN_SUCCESS') {
+            mqttClient.on('message', function (topic, message) {
+                let data = JSON.parse(message.toString());
+                if (data.type === 'JOIN_OK') {
                     document.getElementById('join-screen').classList.add('hidden');
                     document.getElementById('player-screen').classList.remove('hidden');
                     document.getElementById('player-welcome').innerText = "Hi, " + myName;
@@ -200,14 +212,9 @@
                 }
             });
         });
-
-        peer.on('error', function(err) {
-            alert("Lỗi kết nối: Sai mã phòng hoặc mạng không ổn định!");
-            document.getElementById('btn-connect').innerText = "KẾT NỐI MÁY CHỦ";
-            document.getElementById('btn-connect').disabled = false;
-        });
     }
 
+    // 3. CHIA VAI TRÒ
     function startOnlineGame() {
         const rolesConfig = {
             5: ["MERLIN", "PERCIVAL", "LOYAL SERVANT", "ASSASSIN", "MORGANA"],
@@ -216,20 +223,23 @@
             8: ["MERLIN", "PERCIVAL", "LOYAL SERVANT", "LOYAL SERVANT", "LOYAL SERVANT", "ASSASSIN", "MORGANA", "MORDRED"]
         };
 
-        let count = players.length;
+        let pList = Object.values(players);
+        let count = pList.length;
         if (!rolesConfig[count]) { alert("Game cần từ 5 đến 8 người chơi!"); return; }
 
         let shuffled = [...rolesConfig[count]].sort(() => Math.random() - 0.5);
-        let ids = Object.keys(connList);
 
-        ids.forEach((id, index) => {
-            connList[id].role = shuffled[index];
-            connList[id].conn.send({ type: 'ASSIGN_ROLE', role: shuffled[index] });
+        pList.forEach((p, index) => {
+            p.role = shuffled[index];
+            mqttClient.publish('kt_avalon/' + roomCode + '/player/' + p.id, JSON.stringify({
+                type: 'ASSIGN_ROLE',
+                role: p.role
+            }));
         });
 
         document.getElementById('btn-start-game').classList.add('hidden');
         document.getElementById('host-dashboard').classList.remove('hidden');
-        alert("Đã gửi vai trò đến máy điện thoại của tất cả người chơi!");
+        alert("Đã gửi vai trò đến điện thoại của tất cả người chơi!");
     }
 
     function showPlayerRole(roleKey) {
@@ -245,8 +255,13 @@
     }
 
     function sendAction(actionType, value) {
-        if (playerConn) {
-            playerConn.send({ type: 'ACTION', actionType: actionType, value: value, name: myName });
+        if (mqttClient) {
+            mqttClient.publish('kt_avalon/' + roomCode + '/host', JSON.stringify({
+                type: 'ACTION',
+                actionType: actionType,
+                value: value,
+                name: myName
+            }));
             alert("Đã gửi lựa chọn về máy Quản Trò!");
         }
     }
